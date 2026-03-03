@@ -1,24 +1,19 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { getUserContext } from '@/lib/server-context'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
     try {
+        const ctx = await getUserContext()
+
+        if (!ctx || !ctx.companyId) {
+            return NextResponse.json({ error: 'Unauthorized or missing company context' }, { status: 401 })
+        }
+
         const supabase = await createClient()
-
-        const { data: { user }, error: userError } = await supabase.auth.getUser()
-        if (userError || !user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const { data: profile } = await supabase.rpc('ensure_user_context').maybeSingle()
-
-        if (!profile || !profile.company_id) {
-            return NextResponse.json({ error: 'Company context required' }, { status: 403 })
-        }
-
-        const activeCompanyId = profile.company_id
+        const activeCompanyId = ctx.companyId
 
         const { searchParams } = new URL(req.url)
         const yearParam = searchParams.get('year')
