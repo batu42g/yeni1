@@ -41,19 +41,25 @@ export function AuthProvider({ children, initialData }: AuthProviderProps) {
     }
 
     // Additional sync to keep client state consistent across fast navigations
+    const hasHydrated = useRef(false)
     useEffect(() => {
-        if (initialized.current) {
+        if (!hasHydrated.current) {
             if (initialData?.user) {
-                setUser(initialData.user)
-                setCompanies(initialData.companies || [])
+                useAuthStore.setState({
+                    user: initialData.user,
+                    companies: initialData.companies || [],
+                    loading: false
+                })
             } else {
-                if (user) setUser(null)
-                setCompanies([])
+                useAuthStore.setState({
+                    user: null,
+                    companies: [],
+                    loading: false
+                })
             }
-            setLoading(false)
+            hasHydrated.current = true
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [initialData, setUser, setCompanies, setLoading])
+    }, [initialData])
 
     useEffect(() => {
         if (didSubscribe.current) return
@@ -62,14 +68,12 @@ export function AuthProvider({ children, initialData }: AuthProviderProps) {
         const supabase = createClient()
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
             if (event === 'SIGNED_OUT') {
-                setUser(null)
-                setCompanies([])
+                useAuthStore.setState({ user: null, companies: [] })
                 router.push('/login')
+                router.refresh()
             } else if (event === 'SIGNED_IN') {
-                // Next.js will re-stream the server layout yielding fresh initialData
-                // So no need to run custom HTTP logic here anymore.
-                // Just force a refresh if we're technically not carrying user state yet
-                if (!useAuthStore.getState().user) {
+                // If it's a genuine fresh login (no user in initial layout render), force stream re-fetch
+                if (!initialData?.user && !hasHydrated.current) {
                     router.refresh()
                 }
             }
@@ -79,7 +83,7 @@ export function AuthProvider({ children, initialData }: AuthProviderProps) {
             subscription.unsubscribe()
             didSubscribe.current = false
         }
-    }, [router, setUser, setCompanies])
+    }, [router, initialData?.user])
 
     return <>{children}</>
 }
