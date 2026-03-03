@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { useRouter, usePathname } from 'next/navigation'
+import { useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -17,13 +17,12 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children, initialData }: AuthProviderProps) {
     const router = useRouter()
-    const pathname = usePathname()
-    const { user, setUser, setCompanies, setLoading } = useAuthStore()
-    const initialized = useRef(false)
-    const didSubscribe = useRef(false)
 
-    // Syntronous initialization of Zustand store using Server's initialData (No HTTP Waterfall)
-    if (!initialized.current) {
+    // Yalnızca hidratasyon yapıldığını işaretleyen kalıcı referans (Sonsuz Döngüyü kırmak için)
+    const hasHydrated = useRef(false)
+
+    // Sayfa render edilirken Store'u eşzamanlı hydrate ediyoruz. Bu kısım sadece 1 kez çalışır.
+    if (!hasHydrated.current) {
         if (initialData?.user) {
             useAuthStore.setState({
                 user: initialData.user,
@@ -37,53 +36,25 @@ export function AuthProvider({ children, initialData }: AuthProviderProps) {
                 loading: false
             })
         }
-        initialized.current = true
+        hasHydrated.current = true
     }
 
-    // Additional sync to keep client state consistent across fast navigations
-    const hasHydrated = useRef(false)
+    // Effect üzerinde initialData veya AuthState gibi referans tutmuyoruz (Re-render / Infinite Loop bug'ını bitirir)
     useEffect(() => {
-        if (!hasHydrated.current) {
-            if (initialData?.user) {
-                useAuthStore.setState({
-                    user: initialData.user,
-                    companies: initialData.companies || [],
-                    loading: false
-                })
-            } else {
-                useAuthStore.setState({
-                    user: null,
-                    companies: [],
-                    loading: false
-                })
-            }
-            hasHydrated.current = true
-        }
-    }, [initialData])
-
-    useEffect(() => {
-        if (didSubscribe.current) return
-        didSubscribe.current = true
-
         const supabase = createClient()
+
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
             if (event === 'SIGNED_OUT') {
-                useAuthStore.setState({ user: null, companies: [] })
+                useAuthStore.setState({ user: null, companies: [], loading: false })
                 router.push('/login')
                 router.refresh()
-            } else if (event === 'SIGNED_IN') {
-                // If it's a genuine fresh login (no user in initial layout render), force stream re-fetch
-                if (!initialData?.user && !hasHydrated.current) {
-                    router.refresh()
-                }
             }
         })
 
         return () => {
             subscription.unsubscribe()
-            didSubscribe.current = false
         }
-    }, [router, initialData?.user])
+    }, [router]) // Safely tied only to the router reference
 
     return <>{children}</>
 }
