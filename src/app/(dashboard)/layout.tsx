@@ -8,21 +8,24 @@ export default async function DashboardLayout({
 }: {
     children: React.ReactNode
 }) {
-    // Top-level server-side boundary check
-    const ctx = await getUserContext()
+    const { createClient } = await import('@/lib/supabase/server')
+    const supabase = await createClient()
 
-    if (!ctx) {
+    // 1. Get authenticated user first securely
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) {
         redirect('/login')
     }
 
-    // Onboarding check (fetch manually since it's a layout protection feature, not a fast-context feature)
-    const { createClient } = await import('@/lib/supabase/server')
-    const supabase = await createClient()
-    const { data: onboarding } = await supabase
-        .from('user_onboarding')
-        .select('is_completed, current_step')
-        .eq('user_id', ctx.userId)
-        .maybeSingle()
+    // 2. Parallelize all remaining heavy DB queries (context + onboarding)
+    const [contextRes, onboardingRes] = await Promise.all([
+        (supabase as any).rpc('fn_fast_user_context').maybeSingle(),
+        supabase.from('user_onboarding').select('is_completed, current_step').eq('user_id', user.id).maybeSingle()
+    ])
+
+    const onboarding = onboardingRes.data
+    const ctxData = contextRes.data as any
 
     if (onboarding && !onboarding.is_completed) {
         const step = (onboarding.current_step || 'FINISHED').toLowerCase()
@@ -32,7 +35,7 @@ export default async function DashboardLayout({
     }
 
     // Company boundary check
-    if (!ctx.companyId) {
+    if (!ctxData || !ctxData.company_id) {
         // Only redirect to company creation if not accepting an invite path
         // layout acts blindly, so we're good unless they visit /join directly inside an authed protected group
         redirect('/onboarding/company_creation')

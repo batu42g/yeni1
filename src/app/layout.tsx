@@ -3,10 +3,11 @@ import "./globals.css";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "@/components/providers/auth-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
+import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
   title: "CRMPanel — Multi-Tenant SaaS CRM",
-  description: "Production-grade multi-tenant CRM application built with Next.js, Supabase, and TailwindCSS. A showcase of modern SaaS architecture.",
+  description: "Production-grade multi-tenant CRM application built with Next.js, Supabase, and TailwindCSS.",
   keywords: ["CRM", "SaaS", "Next.js", "Supabase", "Multi-Tenant"],
   manifest: "/manifest.json",
   appleWebApp: {
@@ -24,11 +25,52 @@ export const viewport: Viewport = {
   userScalable: false,
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  let initialData = null;
+
+  if (user) {
+    // Parallelize everything for hydration
+    const [contextRes, onboardingRes, membershipsRes] = await Promise.all([
+      (supabase as any).rpc('fn_fast_user_context').maybeSingle(),
+      supabase.from('user_onboarding').select('is_completed, current_step').eq('user_id', user.id).maybeSingle(),
+      supabase.from('members').select('company_id, role, status, companies(id, name, logo_url, status)').eq('user_id', user.id)
+    ]);
+
+    const data = contextRes.data;
+    const onboarding = onboardingRes.data;
+
+    if (data) {
+      const companies = (membershipsRes.data || []).map((m: any) => ({
+        id: m.companies?.id,
+        name: m.companies?.name,
+        logo_url: m.companies?.logo_url,
+        status: m.companies?.status,
+        role: m.role,
+        member_status: m.status
+      }));
+
+      initialData = {
+        user: {
+          id: user.id,
+          active_company_id: data.company_id,
+          role: data.role,
+          full_name: data.full_name,
+          avatar_url: data.avatar_url ?? null,
+          email: user.email || '',
+          onboarding,
+        },
+        companies
+      };
+    }
+  }
+
   return (
     <html lang="tr" data-scroll-behavior="smooth">
       <head>
@@ -40,7 +82,7 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <AuthProvider>
+        <AuthProvider initialData={initialData}>
           <ThemeProvider>
             {children}
             <Toaster
